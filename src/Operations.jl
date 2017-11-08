@@ -5,7 +5,7 @@ using Base: LibGit2
 using Base: Pkg
 using Pkg3.TerminalMenus
 using Pkg3.Types
-import Pkg3: depots, BinaryProvider, USE_LIBGIT2_FOR_ALL_DOWNLOADS
+import Pkg3: depots, BinaryProvider, USE_LIBGIT2_FOR_ALL_DOWNLOADS, NUM_CONCURRENT_DOWNLOADS
 
 const SlugInt = UInt32 # max p = 4
 const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -236,22 +236,23 @@ function install(
     # returns path to version & if it's newly installed
     version_path = find_installed(uuid, hash)
     ispath(version_path) && return version_path, false
-    info("Installing $name")
-    http_download_successful = false
+    http_download_successful = true
     if !USE_LIBGIT2_FOR_ALL_DOWNLOADS
         for url in urls
             archive_url = get_archive_url_for_version(url, version)
             if archive_url != nothing
                 path = tempname() * ".tar.gz"
+                success = true
                 try
                     BinaryProvider.download(archive_url, path)
                 catch e
-                    # Would be nice with a better error from BinaryProvider
-                    e isa ErrorException && continue
-                    rethrow(e)
+                    e isa InterruptException && rethrow(e)
+                    e isa ErrorException && isempty(e.msg) && rethrow(e)
+                    success = false
                 end
+                success || continue
                 http_download_successful = true
-                dir = joinpath(tempdir(), tempname())
+                dir = joinpath(tempdir(), randstring())
                 mkpath(dir)
                 BinaryProvider.unpack(path, dir)
                 dirs = readdir(dir)
@@ -266,7 +267,7 @@ function install(
         ispath(upstream_dir) || mkpath(upstream_dir)
         repo_path = joinpath(upstream_dir, string(uuid))
         repo = ispath(repo_path) ? LibGit2.GitRepo(repo_path) : begin
-            info("Cloning [$uuid] $name")
+            # info("Cloning [$uuid] $name")
             LibGit2.clone(urls[1], repo_path, isbare=true)
         end
         git_hash = LibGit2.GitHash(hash.bytes)
@@ -277,7 +278,6 @@ function install(
                 err isa LibGit2.GitError && err.code == LibGit2.Error.ENOTFOUND || rethrow(err)
             end
             url = urls[i]
-            info("Updating $name $(repr(url))")
             LibGit2.fetch(repo, remoteurl=url, refspecs=refspecs)
         end
         tree = try
@@ -294,8 +294,6 @@ function install(
             target_directory = Base.unsafe_convert(Cstring, version_path)
         )
         h = string(hash)[1:16]
-        vstr = version != nothing ? "v$version [$h]" : "[$h]"
-        info("Installing $name $vstr")
         LibGit2.checkout_tree(repo, tree, options=opts)
     end
     return version_path, true
@@ -352,14 +350,48 @@ function apply_versions(env::EnvCache, pkgs::Vector{PackageSpec})::Vector{UUID}
     names, hashes, urls = version_data(env, pkgs)
     # install & update manifest
     new_versions = UUID[]
-    for pkg in pkgs
+
+    jobs = Channel(NUM_CONCURRENT_DOWNLOADS);
+    results = Channel(NUM_CONCURRENT_DOWNLOADS);
+    @schedule begin
+        for pkg in pkgs
+            put!(jobs, pkg)
+        end
+    end
+
+    for i in 1:NUM_CONCURRENT_DOWNLOADS
+        @schedule begin
+            for pkg in jobs
+                uuid = pkg.uuid
+                version = pkg.version::VersionNumber
+                name, hash = names[uuid], hashes[uuid]
+                try
+                    path, new = install(env, uuid, name, hash, urls[uuid], version)
+                    put!(results, (pkg, path, version, hash, new))
+                catch e
+                    put!(results, e)
+                end
+            end
+        end
+    end
+
+    max_name = maximum(strwidth(names[pkg.uuid]) for pkg in pkgs)
+
+    for _ in 1:length(pkgs) # print out results
+        r = take!(results)
+        r isa Exception && cmderror("Error when installing packages:\n", sprint(Base.showerror, r))
+        pkg, path, version, hash, new = r
+        if new
+            vstr = version != nothing ? "v$version" : "[$h]"
+            new && info("Installed $(rpad(names[pkg.uuid] * " ", max_name + 2, "─")) $vstr")
+        end
         uuid = pkg.uuid
         version = pkg.version::VersionNumber
         name, hash = names[uuid], hashes[uuid]
-        path, new = install(env, uuid, name, hash, urls[uuid], version)
         update_manifest(env, uuid, name, hash, version)
         new && push!(new_versions, uuid)
     end
+
     prune_manifest(env)
     return new_versions
 end

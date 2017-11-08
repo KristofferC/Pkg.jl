@@ -4,6 +4,7 @@ const DEPOTS = [joinpath(homedir(), ".julia")]
 depots() = DEPOTS
 
 const USE_LIBGIT2_FOR_ALL_DOWNLOADS = false
+const NUM_CONCURRENT_DOWNLOADS      = 8
 
 # load snapshotted dependencies
 include("../ext/BinaryProvider/src/BinaryProvider.jl")
@@ -18,7 +19,6 @@ include("REPLMode.jl")
 function __init__()
     push!(empty!(LOAD_PATH), dirname(dirname(@__DIR__)))
     isdefined(Base, :active_repl) && REPLMode.repl_init(Base.active_repl)
-    BinaryProvider.probe_platform_engines!()
 end
 
 function Base.julia_cmd(julia::AbstractString)

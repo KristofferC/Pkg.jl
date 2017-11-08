@@ -423,7 +423,8 @@ function download(url::AbstractString, dest::AbstractString;
         if !wait(oc)
             error()
         end
-    catch
+    catch e
+        e isa InterruptException && rethrow(e)
         error("Could not download $(url) to $(dest)")
     end
 end
