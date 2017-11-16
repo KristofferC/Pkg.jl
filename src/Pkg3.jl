@@ -92,4 +92,7 @@ end
 Base.find_in_path(name::String, wd::Void) = _find_in_path(name, wd)
 Base.find_in_path(name::String, wd::String) = _find_in_path(name, wd)
 
+include("_precompile.jl")
+_precompile_()
+
 end # module
