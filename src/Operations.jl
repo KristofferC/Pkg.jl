@@ -5,7 +5,8 @@ using Base: LibGit2
 using Base: Pkg
 using Pkg3.TerminalMenus
 using Pkg3.Types
-import Pkg3: depots, BinaryProvider, USE_LIBGIT2_FOR_ALL_DOWNLOADS, NUM_CONCURRENT_DOWNLOADS
+import Pkg3: depots, USE_LIBGIT2_FOR_ALL_DOWNLOADS, NUM_CONCURRENT_DOWNLOADS
+import BinaryProvider
 
 const SlugInt = UInt32 # max p = 4
 const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -241,7 +242,7 @@ function install(
         for url in urls
             archive_url = get_archive_url_for_version(url, version)
             if archive_url != nothing
-                path = tempname() * ".tar.gz"
+                path = joinpath(tempdir(), name * "_" * randstring(6) * ".tar.gz")
                 success = true
                 try
                     BinaryProvider.download(archive_url, path)
@@ -252,13 +253,16 @@ function install(
                 end
                 success || continue
                 http_download_successful = true
-                dir = joinpath(tempdir(), randstring())
+                dir = joinpath(tempdir(), randstring(12))
                 mkpath(dir)
                 BinaryProvider.unpack(path, dir)
                 dirs = readdir(dir)
+                # 7z on Win might create this spurious file
+                filter!(x -> x != "pax_global_header", dirs)
                 @assert length(dirs) == 1
                 !isdir(version_path) && mkpath(version_path)
                 mv(joinpath(dir, dirs[1]), version_path; remove_destination=true)
+                Base.rm(path; force = true)
             end
         end
     end
@@ -355,13 +359,19 @@ function apply_versions(env::EnvCache, pkgs::Vector{PackageSpec})::Vector{UUID}
     results = Channel(NUM_CONCURRENT_DOWNLOADS);
     @schedule begin
         for pkg in pkgs
+            println("Putting $(pkg.name) in jobs channel")
             put!(jobs, pkg)
         end
     end
 
+    scheduled = []
+    finished = []
+
     for i in 1:NUM_CONCURRENT_DOWNLOADS
         @schedule begin
             for pkg in jobs
+                push!(scheduled, pkg.name)
+                println("Starting on task dealing with $(pkg.name)")
                 uuid = pkg.uuid
                 version = pkg.version::VersionNumber
                 name, hash = names[uuid], hashes[uuid]
@@ -371,16 +381,35 @@ function apply_versions(env::EnvCache, pkgs::Vector{PackageSpec})::Vector{UUID}
                 catch e
                     put!(results, e)
                 end
+                push!(finished, pkg.name)
+                println("Finished task dealing with $(pkg.name)")
             end
         end
     end
 
     max_name = maximum(strwidth(names[pkg.uuid]) for pkg in pkgs)
 
+    all_package_names = [pkg.name for pkg in pkgs]
+    handled_packages = String[]
     for _ in 1:length(pkgs) # print out results
         r = take!(results)
         r isa Exception && cmderror("Error when installing packages:\n", sprint(Base.showerror, r))
         pkg, path, version, hash, new = r
+        push!(handled_packages, pkg.name)
+        println("Handled the result from pkg $(pkg.name) ")
+        d = setdiff(all_package_names, handled_packages)
+        if length(d) < 10
+            println("****************")
+            println("Packages left to handle: ")
+            for _pkg in d
+                sched = false
+                if _pkg in scheduled
+                    sched = true
+                end
+                println(_pkg, "scheduled: ", sched)
+            end
+        end
+
         if new
             vstr = version != nothing ? "v$version" : "[$h]"
             new && info("Installed $(rpad(names[pkg.uuid] * " ", max_name + 2, "─")) $vstr")

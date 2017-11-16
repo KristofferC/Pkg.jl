@@ -4,10 +4,8 @@ const DEPOTS = [joinpath(homedir(), ".julia")]
 depots() = DEPOTS
 
 const USE_LIBGIT2_FOR_ALL_DOWNLOADS = false
-const NUM_CONCURRENT_DOWNLOADS      = 8
+const NUM_CONCURRENT_DOWNLOADS      = 4
 
-# load snapshotted dependencies
-include("../ext/BinaryProvider/src/BinaryProvider.jl")
 include("../ext/TOML/src/TOML.jl")
 include("../ext/TerminalMenus/src/TerminalMenus.jl")
 
