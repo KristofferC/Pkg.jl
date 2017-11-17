@@ -67,7 +67,6 @@ function _find_package(name::String)
     else
         name = string(base, ".jl")
     end
-
     info = Pkg3.Operations.package_env_info(base, verb = "use")
     info == nothing && @goto find_global
     haskey(info, "uuid") || @goto find_global

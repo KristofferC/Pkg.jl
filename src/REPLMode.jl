@@ -31,6 +31,7 @@ const cmds = Dict(
     "test"      => :test,
     "gc"        => :gc,
     "fsck"      => :fsck,
+    "test"      => :test,
 )
 
 const opts = Dict(
@@ -43,6 +44,7 @@ const opts = Dict(
     "minor"    => :minor,
     "patch"    => :patch,
     "fixed"    => :fixed,
+    "coverage" => :coverage,
 )
 
 function parse_option(word::AbstractString)
@@ -130,6 +132,7 @@ function do_cmd(repl::Base.REPL.AbstractREPL, input::String)
         cmd == :add    ?    do_add!(env, tokens) :
         cmd == :up     ?     do_up!(env, tokens) :
         cmd == :status ? do_status!(env, tokens) :
+        cmd == :test   ?   do_test!(env, tokens) :
             cmderror("`$cmd` command not yet implemented")
     catch err
         if err isa CommandError
@@ -167,6 +170,8 @@ const help = Base.Markdown.parse("""
     `rm`: remove packages from project or manifest
 
     `up`: update packages in manifest
+
+    `test`: run tests for packages
     """)
 
 const helps = Dict(
@@ -236,6 +241,15 @@ const helps = Dict(
     the following packages to be upgraded only within the current major, minor,
     patch version; if the `--fixed` upgrade level is given, then the following
     packages will not be upgraded at all.
+    """, :test => md"""
+
+        test [opts] pkg[=uuid] ...
+
+        opts: --coverage
+
+    Run the tests for package `pkg`. This is done by running the file `test/runtests.jl`
+    in the package directory. The option `--coverage` can be used to run the tests with
+    coverage enabled.
     """,
 )
 
@@ -366,6 +380,38 @@ function do_status!(env::EnvCache, tokens::Vector{Tuple{Symbol,Vararg{Any}}})
         end
     end
     Pkg3.Display.status(env, mode)
+end
+
+# TODO , test recursive dependencies as on option.
+function do_test!(env::EnvCache, tokens::Vector{Tuple{Symbol,Vararg{Any}}})
+    pkgs = PackageSpec[]
+    coverage = false
+    while !isempty(tokens)
+        token = shift!(tokens)
+        if token[1] == :pkg
+            if length(token) == 2
+                pkg = PackageSpec(token[2])
+                pkg.mode = :manifest
+                push!(pkgs, pkg)
+            else
+                cmderror("`test` only takes a set of packages to test")
+            end
+        elseif token[1] == :opt
+            if token[2] == :coverage
+                coverage = true
+            else
+                cmderror("invalid option for `test`: --$(token[2])")
+            end
+        else
+            # TODO: Better error message
+            cmderror("invalid usage for `test`")
+        end
+    end
+    (isempty(pkgs) || isempty(tokens)) && cmderror("`test` takes a set of packages")
+    project_resolve!(env, pkgs)
+    manifest_resolve!(env, pkgs)
+    ensure_resolved(env, pkgs)
+    Pkg3.Operations.test(env, pkgs; coverage = coverage)
 end
 
 function create_mode(repl, main)
