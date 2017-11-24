@@ -1,7 +1,7 @@
 module Types
 
 using Base.Random: UUID
-using Base.Pkg.Types: VersionSet, Available
+using Pkg3.Pkg2.Types: VersionSet, Available
 using Pkg3.TOML
 using Pkg3.TerminalMenus
 
