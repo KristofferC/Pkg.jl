@@ -15,12 +15,14 @@ function temp_pkg_dir(fn::Function)
     end
 end
 
+const TEST_PKG = "Crayons"
+
 temp_pkg_dir() do
-    Pkg3.add("Example")
-    @eval import Example
+    Pkg3.add(TEST_PKG)
+    @eval import $(Symbol(TEST_PKG))
     Pkg3.update()
-    Pkg3.test("Example")
-    Pkg3.rm("Example")
+    Pkg3.test(TEST_PKG)
+    Pkg3.rm(TEST_PKG)
 
     nonexisting_pkg = randstring(14)
     @test_throws CommandError Pkg3.API.add(nonexisting_pkg)
