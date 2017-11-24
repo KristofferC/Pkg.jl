@@ -2,10 +2,9 @@ module Operations
 
 using Base.Random: UUID
 using Base: LibGit2
-using Base: Pkg
 using Pkg3.TerminalMenus
 using Pkg3.Types
-import Pkg3: depots, BinaryProvider, USE_LIBGIT2_FOR_ALL_DOWNLOADS, NUM_CONCURRENT_DOWNLOADS
+import Pkg3: Pkg2, depots, BinaryProvider, USE_LIBGIT2_FOR_ALL_DOWNLOADS, NUM_CONCURRENT_DOWNLOADS
 
 const SlugInt = UInt32 # max p = 4
 const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -135,7 +134,7 @@ function deps_graph(env::EnvCache, pkgs::Vector{PackageSpec})
                     d = get_or_make(Dict{String,UUID}, dependencies, v)
                     r = get_or_make(Dict{String,VersionSpec}, compatibility, v)
                     q = Dict(u => get_or_make(VersionSpec, r, p) for (p, u) in d)
-                    VERSION in get_or_make(VersionSpec, r, "julia") || continue
+                    # VERSION in get_or_make(VersionSpec, r, "julia") || continue
                     deps[uuid][v] = (h, q)
                     for (p, u) in d
                         u in uuids || push!(uuids, u)
@@ -153,7 +152,9 @@ function resolve_versions!(env::EnvCache, pkgs::Vector{PackageSpec})::Dict{UUID,
     info("Resolving package versions")
     # anything not mentioned is fixed
     uuids = UUID[pkg.uuid for pkg in pkgs]
+    uuid_to_name = Dict{String, String}()
     for (name::String, uuid::UUID) in env.project["deps"]
+        uuid_to_name[string(uuid)] = name
         uuid in uuids && continue
         info = manifest_info(env, uuid)
         haskey(info, "version") || continue
@@ -161,10 +162,16 @@ function resolve_versions!(env::EnvCache, pkgs::Vector{PackageSpec})::Dict{UUID,
         push!(pkgs, PackageSpec(name, uuid, ver))
     end
     # construct data structures for resolver and call it
-    reqs = Dict{String,Pkg.Types.VersionSet}(string(pkg.uuid) => pkg.version for pkg in pkgs)
-    deps = convert(Dict{String,Dict{VersionNumber,Pkg.Types.Available}}, deps_graph(env, pkgs))
-    deps = Pkg.Query.prune_dependencies(reqs, deps)
-    vers = convert(Dict{UUID,VersionNumber}, Pkg.Resolve.resolve(reqs, deps))
+    reqs = Dict{String,Pkg2.Types.VersionSet}(string(pkg.uuid) => pkg.version for pkg in pkgs)
+    deps = convert(Dict{String,Dict{VersionNumber,Pkg2.Types.Available}}, deps_graph(env, pkgs))
+    for dep_uuid in keys(deps)
+        info = manifest_info(env, UUID(dep_uuid))
+        if info != nothing
+            uuid_to_name[info["uuid"]] = info["name"]
+        end
+    end
+    deps = Pkg2.Query.prune_dependencies(reqs, deps, uuid_to_name)
+    vers = convert(Dict{UUID,VersionNumber}, Pkg2.Resolve.resolve(reqs, deps, uuid_to_name))
     find_registered!(env, collect(keys(vers)))
     # update vector of package versions
     for pkg in pkgs
@@ -236,7 +243,7 @@ function install(
     # returns path to version & if it's newly installed
     version_path = find_installed(uuid, hash)
     ispath(version_path) && return version_path, false
-    http_download_successful = true
+    http_download_successful = false
     if !USE_LIBGIT2_FOR_ALL_DOWNLOADS && version != nothing
         for url in urls
             archive_url = get_archive_url_for_version(url, version)
@@ -343,11 +350,21 @@ function prune_manifest(env::EnvCache)
         end
         clean && break
     end
-    filter!(env.manifest) do _, infos
-        filter!(infos) do info
-            haskey(info, "uuid") && UUID(info["uuid"]) ∈ keep
+    if VERSION < v"0.7.0-DEV.1393"
+        filter!(env.manifest) do _, infos
+            filter!(infos) do info
+                haskey(info, "uuid") && UUID(info["uuid"]) ∈ keep
+            end
+            !isempty(infos)
         end
-        !isempty(infos)
+    else
+        filter!(env.manifest) do _infos # (_, info) doesn't parse on 0.6
+            _, infos = _infos
+            filter!(infos) do info
+                haskey(info, "uuid") && UUID(info["uuid"]) ∈ keep
+            end
+            !isempty(infos)
+        end
     end
 end
 
@@ -380,7 +397,8 @@ function apply_versions(env::EnvCache, pkgs::Vector{PackageSpec})::Vector{UUID}
         end
     end
 
-    max_name = maximum(strwidth(names[pkg.uuid]) for pkg in pkgs)
+    textwidth = VERSION < v"0.7.0-DEV.1930" ? Base.strwidth : Base.textwidth
+    max_name = maximum(textwidth(names[pkg.uuid]) for pkg in pkgs)
 
     for _ in 1:length(pkgs)
         r = take!(results)
@@ -457,7 +475,8 @@ function build_versions(env::EnvCache, uuids::Vector{UUID})
             cmd = ```
                 $(Base.julia_cmd()) -O0 --color=no --history-file=no
                 --startup-file=$(Base.JLOptions().startupfile != 2 ? "yes" : "no")
-                --compilecache=$(Base.JLOptions().use_compilecache != 0 ? "yes" : "no")
+                --compilecache=$((VERSION < v"0.7.0-DEV.1735" ? Base.JLOptions().use_compilecache :
+                                  Base.JLOptions().use_compiled_modules) != 0 ? "yes" : "no")
                 --eval $code
                 ```
             open(log_file, "w") do log
@@ -516,8 +535,15 @@ function rm(env::EnvCache, pkgs::Vector{PackageSpec})
     end
     # delete drops from project
     n = length(env.project["deps"])
-    filter!(env.project["deps"]) do _, uuid
-        UUID(uuid) ∉ drop
+    if VERSION < v"0.7.0-DEV.1393"
+        filter!(env.project["deps"]) do _, uuid
+            UUID(uuid) ∉ drop
+        end
+    else
+        filter!(env.project["deps"]) do _uuid # (_, uuid) doesn't parse on 0.6
+            _, uuid = _uuid
+            UUID(uuid) ∉ drop
+        end
     end
     if length(env.project["deps"]) == n
         info("No changes")
@@ -577,5 +603,60 @@ function up(env::EnvCache, pkgs::Vector{PackageSpec})
     build_versions(env, new)
 end
 
+function test(env::EnvCache, pkgs::Vector{PackageSpec}; coverage=false)
+    # See if we can find the test files for all packages
+    missing_runtests = String[]
+    testfiles        = String[]
+    version_paths    = String[]
+    for pkg in pkgs
+        info = manifest_info(env, pkg.uuid)
+        haskey(info, "hash-sha1") || cmderror("Could not find hash-sha for package $(pkg.name)")
+        version_path = find_installed(pkg.uuid, SHA1(info["hash-sha1"]))
+        testfile = joinpath(version_path, "test", "runtests.jl")
+        if !isfile(testfile)
+            push!(missing_runtests, pkg.name)
+        end
+        push!(version_paths, version_path)
+        push!(testfiles, testfile)
+    end
+    if !isempty(missing_runtests)
+        cmderror(length(missing_runtests) == 1 ? "Package " : "Packages ",
+                join(missing_runtests, ", "),
+                " did not provide a `test/runtests.jl` file")
+    end
+
+    pkgs_errored = []
+    for (pkg, testfile, version_path) in zip(pkgs, testfiles, version_paths)
+        # TODO: Test only dependencies
+        info("Testing $(pkg.name) located at $version_path")
+        # TODO, cd to test folder (need to be careful with getting the same EnvCache
+        # as for this session in that case
+        try
+            compilemod_opt, compilemod_val = VERSION < v"0.7.0-DEV.1735" ?
+                ("compilecache" ,     Base.JLOptions().use_compilecache) :
+                ("compiled-modules",  Base.JLOptions().use_compiled_modules)
+            testcmd = `"import Pkg3; include(\"$testfile\")"`
+            cmd = ```
+                $(Base.julia_cmd())
+                --code-coverage=$(coverage ? "user" : "none")
+                --color=$(Base.have_color ? "yes" : "no")
+                --$compilemod_opt=$(Bool(compilemod_val) ? "yes" : "no")
+                --check-bounds=yes
+                --startup-file=$(Base.JLOptions().startupfile != 2 ? "yes" : "no")
+                $testfile
+                ```
+            run(cmd)
+            info("$(pkg.name) tests passed")
+        catch err
+            push!(pkgs_errored, pkg.name)
+        end
+    end
+
+    if !isempty(pkgs_errored)
+        cmderror(length(pkgs_errored) == 1 ? "Package " : "Packages ",
+                 join(pkgs_errored, ", "),
+                 " errored during testing")
+    end
+end
 end # module
 

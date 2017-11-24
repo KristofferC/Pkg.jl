@@ -1,7 +1,11 @@
 using TOML
 import TOML: linecol, whitespace, comment, newline, expect, lookup, Parser, parse
 
-using Base.Test
+if Base.isdeprecated(Base, :Test)
+    using Test
+else
+    using Base.Test
+end
 
 macro testval(s, v)
     f = "foo = $s"
@@ -506,7 +510,7 @@ trimmed in raw strings.
                 a = [2]
                 [[a]]
                 b = 5
-            ", "expected type `TOML.Table`, found type `Int64`")
+            ", "expected type `TOML.Table`, found type `$(Int)`")
             @fail("
                 a = 1
                 [a.b]
