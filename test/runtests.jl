@@ -21,10 +21,11 @@ function temp_pkg_dir(fn::Function)
 end
 
 temp_pkg_dir() do
-    Pkg3.API.add("Example")
+    Pkg3.add("Example")
     @eval import Example
-    Pkg3.API.up()
-    Pkg3.API.rm("Example")
+    Pkg3.update()
+    Pkg3.test("Example")
+    Pkg3.rm("Example")
 
     nonexisting_pkg = randstring(14)
     @test_throws CommandError Pkg3.API.add(nonexisting_pkg)
