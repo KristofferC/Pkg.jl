@@ -1,5 +1,9 @@
 using Pkg3
-using Base.Test
+if Base.isdeprecated(Base, :Test)
+    using Test
+else
+    using Base.Test
+end
 using Pkg3.Types
 
 function temp_pkg_dir(fn::Function)

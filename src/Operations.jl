@@ -632,12 +632,15 @@ function test(env::EnvCache, pkgs::Vector{PackageSpec}; coverage=false)
         # TODO, cd to test folder (need to be careful with getting the same EnvCache
         # as for this session in that case
         try
+            compilemod_opt, compilemod_val = VERSION < v"0.7.0-DEV.1735" ?
+                ("compilecache" ,     Base.JLOptions().use_compilecache) :
+                ("compiled-modules",  Base.JLOptions().use_compiled_modules)
             testcmd = `"import Pkg3; include(\"$testfile\")"`
             cmd = ```
                 $(Base.julia_cmd())
                 --code-coverage=$(coverage ? "user" : "none")
                 --color=$(Base.have_color ? "yes" : "no")
-                --compilecache=$(Bool(Base.JLOptions().use_compilecache) ? "yes" : "no")
+                --$compilemod_opt=$(Bool(compilemod_val) ? "yes" : "no")
                 --check-bounds=yes
                 --startup-file=$(Base.JLOptions().startupfile != 2 ? "yes" : "no")
                 $testfile
