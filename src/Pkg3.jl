@@ -33,6 +33,9 @@ include("Operations.jl")
 include("REPLMode.jl")
 include("API.jl")
 
+import .API: add, rm, up, test
+const update = up
+
 @enum LoadErrorChoice LOAD_ERROR_QUERY LOAD_ERROR_INSTALL LOAD_ERROR_ERROR
 
 Base.@kwdef mutable struct GlobalSettings

@@ -407,11 +407,8 @@ function do_test!(env::EnvCache, tokens::Vector{Tuple{Symbol,Vararg{Any}}})
             cmderror("invalid usage for `test`")
         end
     end
-    (isempty(pkgs) || isempty(tokens)) && cmderror("`test` takes a set of packages")
-    project_resolve!(env, pkgs)
-    manifest_resolve!(env, pkgs)
-    ensure_resolved(env, pkgs)
-    Pkg3.Operations.test(env, pkgs; coverage = coverage)
+    isempty(pkgs) && cmderror("`test` takes a set of packages")
+    Pkg3.API.test(env, pkgs; coverage = coverage)
 end
 
 function create_mode(repl, main)
