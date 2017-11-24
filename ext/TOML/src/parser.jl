@@ -1,9 +1,9 @@
 NONE() = Nullable()
-NONE{T}(::Type{T}) = Nullable{T}()
-SOME{T}(v::T) = Nullable{T}(v)
+NONE(::Type{T}) where {T} = Nullable{T}()
+SOME(v::T) where {T} = Nullable{T}(v)
 
 "TOML Table"
-type Table
+mutable struct Table
     values::Dict{AbstractString,Any}
     defined::Bool
 end
@@ -34,14 +34,14 @@ Base.getindex(tbl::Table, key::AbstractString) = tbl.values[key]
 Base.haskey(tbl::Table, key::AbstractString) = haskey(tbl.values ,key)
 
 "Parser error exception"
-type ParserError <: Exception
+mutable struct ParserError <: Exception
     lo::Int
     hi::Int
     msg::String
 end
 
 "TOML Parser"
-type Parser
+mutable struct Parser
     input::IO
     errors::Vector{ParserError}
 
@@ -643,6 +643,7 @@ function array(p::Parser, st::Int)
     !expect(p, '[') && return NONE()
     ret = Any[]
     rettype = Any
+    expected = Any
     while true
 
         # Break out early if we see the closing bracket
@@ -657,9 +658,7 @@ function array(p::Parser, st::Int)
 
         pend = nextpos(p)
         valtype = isa(pvalue, Array) ? Array : typeof(pvalue)
-
         expected = rettype === Any ? valtype : expected
-
         if valtype != expected
             error(p, pstart, pend, "expected type `$expected`, found type `$valtype`")
         else
