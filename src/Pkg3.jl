@@ -23,6 +23,7 @@ if !isdefined(Base, :EqualTo)
 end
 
 # load snapshotted dependencies
+include("../ext/SHA/src/SHA.jl")
 include("../ext/BinaryProvider/src/BinaryProvider.jl")
 include("../ext/TOML/src/TOML.jl")
 include("../ext/TerminalMenus/src/TerminalMenus.jl")

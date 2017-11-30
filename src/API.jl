@@ -2,9 +2,8 @@ module API
 
 import ..Pkg3
 import ..Pkg3.DEFAULT_DEV_PATH
-using ..Pkg3:  Types
+using ..Pkg3: SHA, Types
 using Base.Random.UUID
-using SHA
 
 previewmode_info() = info("In preview mode")
 
