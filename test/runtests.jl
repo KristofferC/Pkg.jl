@@ -1,6 +1,7 @@
 using Pkg3
 using Pkg3.Types
-if Base.isdeprecated(Main, :Test)
+
+if VERSION >= v"0.7.0-DEV.2004"
     using Test
 else
     using Base.Test
@@ -10,7 +11,9 @@ function temp_pkg_dir(fn::Function)
     local project_path
     try
         project_path = joinpath(tempdir(), randstring())
-        withenv("JULIA_ENV" => project_path) do
+        dev_path     = joinpath(tempdir(), randstring())
+        withenv("JULIA_ENV"      => project_path,
+                "JULIA_DEV_PATH" => dev_path) do
             fn()
         end
     finally
@@ -45,6 +48,13 @@ temp_pkg_dir() do
         @test contains(sprint(showerror, e), TEST_PKG)
     end
 
+    # Clone an unregistered packge and check that it can be imported
+    Pkg3.clone("https://github.com/fredrikekre/ImportMacros.jl")
+    @eval import ImportMacros
+
+    # Clone an registered packge and check that it can be imported
+    Pkg3.clone("https://github.com/KristofferC/TimerOutputs.jl")
+    @eval import TimerOutputs
 
     nonexisting_pkg = randstring(14)
     @test_throws CommandError Pkg3.add(nonexisting_pkg)

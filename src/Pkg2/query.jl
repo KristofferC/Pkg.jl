@@ -4,7 +4,7 @@ module Query
 
 import ..PkgError
 using ..Types
-import Pkg3.equalto
+import ...Pkg3.equalto
 
 # If there are explicitly required packages, dicards all versions outside
 # the allowed range.
