@@ -102,12 +102,14 @@ function Project(project_path::String)
 
     julia_compat, julia_compat_str = compat_data("julia")
     mdeps = extract_deps("deps")
+    #=
     mdeps[JULIA_UUID] = Dependency(
         "julia",
         JULIA_UUID,
         julia_compat,
         julia_compat_str,
     )
+    =#
     extras = extract_deps("extras")
 
     # Targets

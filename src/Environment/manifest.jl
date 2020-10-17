@@ -17,21 +17,26 @@ end
 default_pinned() = false
 
 struct Manifest
-    filename::String
+    path::String
     pkgs::Dict{UUID, ManifestPkg}
     julia_version::Union{VersionNumber, Nothing}
 end
 
+Base.get(m::Manifest, u::UUID, default) = get(m.pkgs, u, default)
+Base.getindex(m::Manifest, u::UUID) = m.pkgs[u]
+
 function Base.copy(m::Manifest)
     Manifest(
-        m.filename,
+        m.path,
         copy(m.pkgs),
         m.julia_version,
     )
 end
 
 function Manifest(manifest_path::String)
-    d = isfile(manifest_path) ? TOML.parsefile(manifest_path) : Dict{String, Any}()
+    manifest_path = realpath(manifest_path)
+
+    d = TOML.parsefile(manifest_path)
 
     # We first check if we have a condensed form, in that case
     # we collect all the name => uuid mappings
@@ -109,7 +114,7 @@ function Manifest(manifest_path::String)
         end
     end
     # TODO: consistency check
-    return Manifest(basename(manifest_path), pkgs, julia_version)
+    return Manifest(manifest_path, pkgs, julia_version)
 end
 
 
@@ -201,11 +206,12 @@ end
 
 # TODO: use this when writing the manifest?
 # default_version = VersionNumber(VERSION.major, VERSION.minor, VERSION.patch)
-function write_manifest(dir::String, m::Manifest)
+write_manifest(m::Manifest) = write_manifest(m.path, m)
+function write_manifest(path::String, m::Manifest)
     d = destructure(m)
     str = sprint() do io
         print(io, "# This file is machine-generated - editing it directly is not advised\n\n")
         TOML.print(io, d, sorted=true)
     end
-    write(joinpath(dir, m.filename), str)
+    write(path, str)
 end
