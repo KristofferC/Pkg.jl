@@ -3,8 +3,7 @@ const JULIA_UUID = UUID("1222c4b2-2114-5bfd-aeef-88e4692bbb3e")
 struct Package
     name::String
     uuid::UUID
-    # Is a version required?
-    version::VersionNumber
+    version::Union{Nothing, VersionNumber} # stdlibs don't have a version
 end
 
 struct Dependency
@@ -44,51 +43,149 @@ end
 
 default_compat() = VersionSpec()
 
+@enum ProjectParseExceptionTypes begin
+    InsufficientPackageKeys
+    UnexpectedType
+    UUIDParseError
+    VersionParseError
+    CompatParseError
+end
+
+mutable struct ProjectParseException <: Exception
+    typ::ProjectParseExceptionTypes
+    data::Any
+    path::Union{String, Nothing} # make @lazy
+end
+ProjectParseException(typ::ProjectParseExceptionTypes, data=nothing) = 
+    ProjectParseException(typ, data, nothing)
+
+function Base.showerror(io::IO, exc::ProjectParseException)
+    print(io, "invalid project file: ", repr(exc.path), ": ")
+    if exc.typ == InsufficientPackageKeys
+        print(io, "expected all keys `name`, `version`, `uuid` to exist if one of them exist")
+    elseif exc.typ == UnexpectedType
+        key, T = exc.data::Tuple{String, DataType}
+        print(io, "expected value of key `", key, "` to be of type `", T, "`")
+    elseif exc.typ in (UUIDParseError, VersionParseError)
+        s = exc.typ = UUIDParseError ? "UUID" :
+            exc.typ = VersionNumber  ? "VersionNumber" : error()
+        print(io, "failed to parse: ", repr(exc.data::String), "as a ", s)
+    elseif exc.typ == CompatParseError
+        s, msg = exc.data::Tuple{String, String}
+        print(io, "failed to parse: ", repr(s), " as a compat entry: ", msg)
+    end
+end
+
+@eval macro $(Symbol("try"))(expr)
+    return quote
+        v = $(esc(expr))
+        v isa ProjectParseException && throw(v)
+        # v isa ProjectParseException && return v
+        v
+    end
+end
+
+function parse_uuid(uuid)
+    uuid isa String || return ProjectParseException(UnexpectedType, ("uuid",    String))
+    uuid′ = tryparse(UUID, uuid)
+    uuid′ === nothing && return ProjectParseException(UUIDParseError, uuid)
+    return uuid′
+end
+
+function parse_package_part!(d::Dict{String, Any})::Union{Package, Nothing, ProjectParseException}
+    name        = pop!(d, "name",    nothing)
+    version_str = pop!(d, "version", nothing)
+    uuid_str    = pop!(d, "uuid",    nothing)
+
+    if name === nothing && version_str === nothing && uuid_str === nothing
+        return nothing
+    elseif !(name !== nothing && version_str !== nothing && uuid_str !== nothing)
+        return ProjectParseException(InsufficientPackageKeys)
+    end
+
+    # Check fields are expected types
+    name        isa String || return ProjectParseException(UnexpectedType, ("name",    String))
+    version_str isa String || return ProjectParseException(UnexpectedType, ("version", String))
+
+    # Check relevant fields are parsable
+    version = tryparse(VersionNumber, version_str)
+    version === nothing && return ProjectParseException(VersionParseError, version)
+
+    uuid = @try parse_uuid(uuid_str)
+
+    return Package(name, uuid, version)
+end
+
+function parse_compat_part!(d::Dict{String, Any})::Union{Dict{String, Pair{String, VersionSpec}}, ProjectParseException}
+    compats_toml = pop!(d, "compat", nothing)
+    compats = Dict{String, Pair{String, VersionSpec}}()
+    compats_toml === nothing && return compats
+    compats_toml isa Dict{String, Any} || return ProjectParseException(UnexpectedType, ("compat", Dict{String, Any}))
+
+    for (name, compat_toml) in compats_toml
+        compat_toml isa String || return ProjectParseException(UnexpectedType, (name, String))
+        function parse_version(compat_toml::String)
+            # Ugly
+            try
+                return semver_spec(compat_toml)
+            catch e
+                if e isa ErrorException
+                    return ProjectParseException(CompatParseError, (compat_toml, e.msg))
+                else
+                    rehtrow(e)
+                end
+            end
+        end
+        compat = @try parse_version(compat_toml)
+
+        compats[name] = compat_toml => compat
+    end
+    return compats
+end
+
+
 function Project(project_path::String)
+    isfile(project_path) || error("no such file: ", repr(project_path))
+    project_path = realpath(project_path)
+    p = tryparsefile(project_path)
+    if p isa ProjectParseException
+        p.path = project_path
+        throw(p)
+    end
+    return p
+end
+
+function tryparsefile(project_path::String)::Union{Project, ProjectParseException}
+
     d = isfile(project_path) ? TOML.parsefile(project_path) : Dict{String, Any}()
 
     # Package
-    name = pop!(d, "name", nothing)::Union{Nothing, String}
-    uuid = pop!(d, "uuid", nothing)::Union{Nothing, String}
-    version = pop!(d, "version", nothing)::Union{Nothing, String}
-    pkg = if name !== nothing
-        uuid === nothing && error("todo")
-        version === nothing && error("todo")
-        Package(name, UUID(uuid), VersionNumber(version))
-    else
-        nothing
-    end
+    pkg = @try parse_package_part!(d)
 
     # Compat
-    compats_toml = pop!(d, "compat", nothing)::Union{Nothing, Dict{String, Any}}
-    compats = Dict{String, VersionSpec}()
-    if compats_toml !== nothing
-        for (name, compat_toml) in compats_toml
-            compat_toml::String
-            compats[name] = semver_spec(compat_toml)
-        end
-    end
 
     name_to_uuid = Dict{String, UUID}()
 
+    compats_toml = @try parse_compat_part!(d)
+
     function compat_data(name)
-        if compats_toml !== nothing
-            compat_toml = get(compats_toml, name, nothing)::Union{String, Nothing}
-            if compat_toml !== nothing
-                return semver_spec(compat_toml), compat_toml
-            end
+        compat_toml = get(compats_toml, name, nothing)
+        if compat_toml !== nothing
+            return compat_toml
         end
-        return default_compat(), ""
+        return "" => default_compat()
     end
 
     function extract_deps(key)
-        deps_toml = pop!(d, key, nothing)::Union{Nothing, Dict{String, Any}}
+        deps_toml = pop!(d, key, nothing)
+        deps_toml isa Dict{String, Any} || return ProjectParseException("deps", Dict{String, Any})
+        deps_toml == nothing && return
         deps = Dict{UUID, Dependency}()
         if deps_toml !== nothing
-            for (name, uuid) in deps_toml
-                uuid = UUID(uuid::String)
+            for (name, uuid_str) in deps_toml
+                uuid = @try parse_uuid(uuid_str)
                 name_to_uuid[name] = uuid
-                compat, compat_str = compat_data(name)
+                compat_str, compat = compat_data(name)
                 deps[uuid] = Dependency(
                     name,
                     uuid,
@@ -100,19 +197,19 @@ function Project(project_path::String)
         return deps
     end
 
-    julia_compat, julia_compat_str = compat_data("julia")
+    julia_compat_str, julia_compat = compat_data("julia")
     mdeps = extract_deps("deps")
-    #=
+
     mdeps[JULIA_UUID] = Dependency(
         "julia",
         JULIA_UUID,
         julia_compat,
         julia_compat_str,
     )
-    =#
     extras = extract_deps("extras")
 
-    # Targets
+    # Verify
+    # TODO:
     targets_toml = pop!(d, "targets", nothing)::Union{Nothing, Dict{String, Any}}
     targets = Dict{String, Vector{UUID}}()
     if targets_toml !== nothing
